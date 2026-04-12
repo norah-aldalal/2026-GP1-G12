@@ -123,3 +123,64 @@ function currentUserId(): int
 {
     return (int)($_SESSION['user_id'] ?? 0);
 }
+
+// ── Password Reset via Cookies ────────────────────────────
+define('RESET_SECRET', 'siraj_reset_secret_2026');
+
+function issueResetCookie(string $email): string {
+    $code    = str_pad(random_int(0, 9999), 4, '0', STR_PAD_LEFT);
+    $expires = time() + 600;
+    $payload = base64_encode(json_encode([
+        'email'    => $email,
+        'code'     => $code,
+        'expires'  => $expires,
+        'attempts' => 0,
+    ]));
+    $sig = hash_hmac('sha256', $payload, RESET_SECRET);
+    setcookie('siraj_reset', $payload . '.' . $sig, [
+        'expires'  => $expires,
+        'path'     => '/',
+        'httponly' => true,
+        'samesite' => 'Strict',
+    ]);
+    return $code;
+}
+
+function verifyResetCode(string $email, string $entered): string {
+    if (empty($_COOKIE['siraj_reset'])) return 'invalid';
+    $parts = explode('.', $_COOKIE['siraj_reset'], 2);
+    if (count($parts) !== 2) return 'invalid';
+    [$payload, $sig] = $parts;
+    if (!hash_equals(hash_hmac('sha256', $payload, RESET_SECRET), $sig)) return 'invalid';
+    $data = json_decode(base64_decode($payload), true);
+    if (!$data || $data['email'] !== $email) return 'invalid';
+    if (time() > $data['expires']) { clearResetCookie(); return 'expired'; }
+    if ($data['attempts'] >= 3)    { clearResetCookie(); return 'max_attempts'; }
+    if ($data['code'] !== $entered) {
+        $data['attempts']++;
+        $p = base64_encode(json_encode($data));
+        $s = hash_hmac('sha256', $p, RESET_SECRET);
+        setcookie('siraj_reset', $p . '.' . $s, ['expires'=>$data['expires'],'path'=>'/','httponly'=>true,'samesite'=>'Strict']);
+        return 'wrong';
+    }
+    $data['used'] = true;
+    $p = base64_encode(json_encode($data));
+    $s = hash_hmac('sha256', $p, RESET_SECRET);
+    setcookie('siraj_reset', $p . '.' . $s, ['expires'=>$data['expires'],'path'=>'/','httponly'=>true,'samesite'=>'Strict']);
+    return 'ok';
+}
+
+function getResetEmail(): ?string {
+    if (empty($_COOKIE['siraj_reset'])) return null;
+    $parts = explode('.', $_COOKIE['siraj_reset'], 2);
+    if (count($parts) !== 2) return null;
+    [$payload, $sig] = $parts;
+    if (!hash_equals(hash_hmac('sha256', $payload, RESET_SECRET), $sig)) return null;
+    $data = json_decode(base64_decode($payload), true);
+    if (!$data || empty($data['used']) || time() > $data['expires']) return null;
+    return $data['email'];
+}
+
+function clearResetCookie(): void {
+    setcookie('siraj_reset', '', time() - 3600, '/', '', false, true);
+}
